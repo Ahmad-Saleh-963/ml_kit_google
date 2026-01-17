@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.objects.DetectedObject
 import com.google.mlkit.vision.objects.ObjectDetection
@@ -98,16 +99,28 @@ fun ObjectTrackingScreen() {
             }
             .pointerInput(Unit) {
                 detectTapGestures { tapOffset ->
-                    // منطق اختيار الجسم عند اللمس
+                    // منطق اختيار الجسم عند اللمس (محسن للتداخل)
                     if (!isTracking) {
                         detectionResult?.let { result ->
                             val scaleX = screenSize.width / result.imageHeight
                             val scaleY = screenSize.height / result.imageWidth
 
-                            // البحث عن الجسم الذي تم الضغط عليه
-                            val selectedObject = result.objects.find { obj ->
+                            // 1. العثور على جميع الأجسام التي تحتوي نقطة اللمس
+                            val candidates = result.objects.filter { obj ->
                                 val scaledBox = scaleBoundingBox(obj.boundingBox, scaleX, scaleY)
                                 scaledBox.contains(tapOffset)
+                            }
+
+                            // 2. اختيار الجسم الذي مركزه هو الأقرب لنقطة اللمس
+                            val selectedObject = candidates.minByOrNull { obj ->
+                                val scaledBox = scaleBoundingBox(obj.boundingBox, scaleX, scaleY)
+                                val centerX = scaledBox.center.x
+                                val centerY = scaledBox.center.y
+                                
+                                // حساب المسافة (Euclidean Distance Squared)
+                                val dx = centerX - tapOffset.x
+                                val dy = centerY - tapOffset.y
+                                dx * dx + dy * dy
                             }
 
                             if (selectedObject != null) {
@@ -149,14 +162,21 @@ fun ObjectTrackingScreen() {
                             style = Stroke(width = 5f)
                         )
                         
+                        // رسم نقطة المركز للمساعدة في الدقة
+                        drawCircle(
+                            color = Color.Yellow,
+                            radius = 8f,
+                            center = scaledBox.center
+                        )
+                        
                         // نص توضيحي
                         drawContext.canvas.nativeCanvas.drawText(
-                            "اضغط للاختيار",
+                            "اضغط",
                             scaledBox.left,
                             scaledBox.top - 10,
                             Paint().apply {
                                 color = android.graphics.Color.YELLOW
-                                textSize = 35f
+                                textSize = 30f
                                 isFakeBoldText = true
                             }
                         )
@@ -224,7 +244,7 @@ fun ObjectTrackingScreen() {
                             }
 
                             // رسم نص الحالة
-                            val text = if (isAligned) "محاذاة تامة" else "س:${dx.toInt()} ص:${dy.toInt()}"
+                            val text = if (isAligned) "محاذاة تامة" else "X:${dx.toInt()} Y:${dy.toInt()}"
                             drawContext.canvas.nativeCanvas.drawText(
                                 text,
                                 currentBox.left,
@@ -284,14 +304,14 @@ fun ObjectTrackingScreen() {
                     if (!isAligned) {
                         Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
                             Text(
-                                text = "أفقي: ${deviationX.toInt()}",
+                                text = "X: ${deviationX.toInt()}",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 22.sp
                             )
                             Spacer(modifier = Modifier.width(20.dp))
                             Text(
-                                text = "عمودي: ${deviationY.toInt()}",
+                                text = "Y: ${deviationY.toInt()}",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 22.sp
@@ -357,8 +377,7 @@ fun scaleBoundingBox(box: android.graphics.Rect, scaleX: Float, scaleY: Float): 
 ===================================================== */
 @Composable
 fun CameraPreview(analyzer: ImageAnalysis.Analyzer) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
     AndroidView(
         factory = { ctx ->
