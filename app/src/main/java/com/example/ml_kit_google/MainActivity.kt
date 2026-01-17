@@ -1,5 +1,4 @@
 @file:OptIn(ExperimentalGetImage::class)
-@file:Suppress("OPT_IN_ARGUMENT_IS_NOT_MARKER")
 
 package com.example.ml_kit_google
 
@@ -14,6 +13,7 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -24,13 +24,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.common.InputImage
@@ -55,110 +61,131 @@ data class DetectionResult(
 )
 
 /* =====================================================
-   MAIN SCREEN - COMPOSE
+   الشاشة الرئيسية - COMPOSE
 ===================================================== */
 @Composable
 fun ObjectTrackingScreen() {
-    // State for detection results
+    // حالة نتائج الكشف
     var detectionResult by remember { mutableStateOf<DetectionResult?>(null) }
     
-    // Tracking State
+    // حالة التتبع
     var isTracking by remember { mutableStateOf(false) }
     var trackedObjectId by remember { mutableStateOf<Int?>(null) }
     
-    // Reference State (Saved in Image Coordinates)
+    // المرجع (نقطة الصفر) - إحداثيات الصورة الأصلية
     var referenceBoundingBox by remember { mutableStateOf<android.graphics.Rect?>(null) }
     
-    // Deviation Info
+    // معلومات الانحراف
     var deviationX by remember { mutableStateOf(0f) }
     var deviationY by remember { mutableStateOf(0f) }
     var isAligned by remember { mutableStateOf(false) }
 
-    // Analyzer
+    // حجم الشاشة الفعلي (لحساب اللمس)
+    var screenSize by remember { mutableStateOf(Size.Zero) }
+
+    // المحلل (Analyzer)
     val analyzer = remember {
         ObjectAnalyzer { result ->
             detectionResult = result
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        // 1. Camera Preview
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { coordinates ->
+                screenSize = coordinates.size.toSize()
+            }
+            .pointerInput(Unit) {
+                detectTapGestures { tapOffset ->
+                    // منطق اختيار الجسم عند اللمس
+                    if (!isTracking) {
+                        detectionResult?.let { result ->
+                            val scaleX = screenSize.width / result.imageHeight
+                            val scaleY = screenSize.height / result.imageWidth
+
+                            // البحث عن الجسم الذي تم الضغط عليه
+                            val selectedObject = result.objects.find { obj ->
+                                val scaledBox = scaleBoundingBox(obj.boundingBox, scaleX, scaleY)
+                                scaledBox.contains(tapOffset)
+                            }
+
+                            if (selectedObject != null) {
+                                trackedObjectId = selectedObject.trackingId
+                                referenceBoundingBox = selectedObject.boundingBox
+                                isTracking = true
+                            }
+                        }
+                    }
+                }
+            }
+    ) {
+        // 1. معاينة الكاميرا
         CameraPreview(analyzer)
 
-        // 2. Overlays (Target Box, Tracking Box, Info)
+        // 2. الرسم (المربعات والمعلومات)
         Canvas(modifier = Modifier.fillMaxSize()) {
             val screenWidth = size.width
             val screenHeight = size.height
-            val screenCenter = Offset(screenWidth / 2, screenHeight / 2)
-
-            // Define the "Selection Area" in the center
-            val selectionBoxSize = 300f
-            val selectionRect = Rect(
-                center = screenCenter,
-                radius = selectionBoxSize / 2
-            )
-
-            // --- Draw Selection Box (Only when NOT tracking) ---
-            if (!isTracking) {
-                drawRect(
-                    color = Color.White.copy(alpha = 0.8f),
-                    topLeft = selectionRect.topLeft,
-                    size = selectionRect.size,
-                    style = Stroke(
-                        width = 5f,
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(30f, 30f), 0f)
-                    )
-                )
-                // Crosshair
-                drawLine(Color.White, Offset(screenCenter.x - 20, screenCenter.y), Offset(screenCenter.x + 20, screenCenter.y), strokeWidth = 3f)
-                drawLine(Color.White, Offset(screenCenter.x, screenCenter.y - 20), Offset(screenCenter.x, screenCenter.y + 20), strokeWidth = 3f)
-            }
-
-            // --- Process Detected Objects ---
+            
+            // معالجة الأجسام المكتشفة
             detectionResult?.let { result ->
                 if (result.objects.isEmpty() && !isTracking) return@let
 
+                // حساب نسب التكبير (مع مراعاة دوران الصورة في الوضع الرأسي)
                 val scaleX = screenWidth / result.imageHeight
                 val scaleY = screenHeight / result.imageWidth
                 
                 if (!isTracking) {
-                    // Just highlight candidates
+                    // --- وضع الاستعداد: رسم مربعات حول كل الأجسام المتاحة ---
                     result.objects.forEach { obj ->
                         val scaledBox = scaleBoundingBox(obj.boundingBox, scaleX, scaleY)
-                        if (selectionRect.overlaps(scaledBox)) {
-                            drawRect(
-                                color = Color.Yellow.copy(alpha = 0.5f),
-                                topLeft = scaledBox.topLeft,
-                                size = scaledBox.size,
-                                style = Stroke(width = 4f)
-                            )
-                        }
+                        
+                        // رسم مربع أصفر
+                        drawRect(
+                            color = Color.Yellow,
+                            topLeft = scaledBox.topLeft,
+                            size = scaledBox.size,
+                            style = Stroke(width = 5f)
+                        )
+                        
+                        // نص توضيحي
+                        drawContext.canvas.nativeCanvas.drawText(
+                            "اضغط للاختيار",
+                            scaledBox.left,
+                            scaledBox.top - 10,
+                            Paint().apply {
+                                color = android.graphics.Color.YELLOW
+                                textSize = 35f
+                                isFakeBoldText = true
+                            }
+                        )
                     }
                 } else {
-                    // --- TRACKING MODE ---
+                    // --- وضع التتبع ---
                     
-                    // 1. Draw the REFERENCE Box (The "Zero" position) - Ghost Box
-                    // We scale the saved reference box to the current screen size
+                    // 1. رسم المربع المرجعي (نقطة البداية) - رمادي
                     referenceBoundingBox?.let { refBox ->
                         val scaledRefRect = scaleBoundingBox(refBox, scaleX, scaleY)
                         
                         drawRect(
-                            color = Color.Gray.copy(alpha = 0.6f),
+                            color = Color.Gray.copy(alpha = 0.7f),
                             topLeft = scaledRefRect.topLeft,
                             size = scaledRefRect.size,
-                            style = Stroke(width = 4f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f))
+                            style = Stroke(width = 4f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 15f), 0f))
                         )
                         drawContext.canvas.nativeCanvas.drawText(
-                            "REF (0,0)",
+                            "نقطة البداية",
                             scaledRefRect.left,
-                            scaledRefRect.top - 10,
+                            scaledRefRect.top - 15,
                             Paint().apply {
                                 color = android.graphics.Color.LTGRAY
-                                textSize = 30f
+                                textSize = 35f
+                                textAlign = Paint.Align.LEFT
                             }
                         )
 
-                        // 2. Find and Draw Current Object
+                        // 2. البحث عن الجسم المتتبع ورسمه
                         val trackedObject = result.objects.find { it.trackingId == trackedObjectId }
                         
                         if (trackedObject != null) {
@@ -166,19 +193,19 @@ fun ObjectTrackingScreen() {
                             val currentCenter = currentBox.center
                             val refCenter = scaledRefRect.center
 
-                            // Calculate Deviation from REFERENCE
+                            // حساب الانحراف
                             val dx = currentCenter.x - refCenter.x
                             val dy = currentCenter.y - refCenter.y
                             
                             deviationX = dx
                             deviationY = dy
 
-                            // Check Alignment (Threshold of 40 pixels)
+                            // التحقق من المحاذاة (هامش خطأ 40 بكسل)
                             isAligned = abs(dx) < 40 && abs(dy) < 40
                             val statusColor = if (isAligned) Color.Green else Color.Red
                             val androidStatusColor = if (isAligned) android.graphics.Color.GREEN else android.graphics.Color.RED
 
-                            // Draw Current Box
+                            // رسم المربع الحالي
                             drawRect(
                                 color = statusColor,
                                 topLeft = currentBox.topLeft,
@@ -186,7 +213,7 @@ fun ObjectTrackingScreen() {
                                 style = Stroke(width = 8f)
                             )
 
-                            // Draw Line from Reference to Current
+                            // رسم خط يربط بين المرجع والموقع الحالي
                             if (!isAligned) {
                                 drawLine(
                                     color = statusColor.copy(alpha = 0.7f),
@@ -196,12 +223,12 @@ fun ObjectTrackingScreen() {
                                 )
                             }
 
-                            // Draw Text Info
-                            val text = if (isAligned) "ALIGNED" else "X:${dx.toInt()} Y:${dy.toInt()}"
+                            // رسم نص الحالة
+                            val text = if (isAligned) "محاذاة تامة" else "س:${dx.toInt()} ص:${dy.toInt()}"
                             drawContext.canvas.nativeCanvas.drawText(
                                 text,
                                 currentBox.left,
-                                currentBox.bottom + 50,
+                                currentBox.bottom + 60,
                                 Paint().apply {
                                     color = androidStatusColor
                                     textSize = 50f
@@ -209,14 +236,14 @@ fun ObjectTrackingScreen() {
                                 }
                             )
                         } else {
-                            // Object Lost
+                            // فقدان الهدف
                              drawContext.canvas.nativeCanvas.drawText(
-                                "LOST TARGET",
-                                screenCenter.x - 150,
-                                screenCenter.y,
+                                "فقدان الهدف",
+                                screenWidth / 2 - 150,
+                                screenHeight / 2,
                                 Paint().apply {
                                     color = android.graphics.Color.RED
-                                    textSize = 60f
+                                    textSize = 70f
                                     isFakeBoldText = true
                                 }
                             )
@@ -226,7 +253,7 @@ fun ObjectTrackingScreen() {
             }
         }
 
-        // 3. UI Controls (Bottom)
+        // 3. واجهة التحكم (أسفل الشاشة)
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -234,107 +261,88 @@ fun ObjectTrackingScreen() {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             if (isTracking) {
-                // Deviation Dashboard
+                // لوحة معلومات الانحراف
                 Column(
                     modifier = Modifier
                         .padding(bottom = 16.dp)
                         .background(
-                            color = if (isAligned) Color.Green.copy(alpha = 0.2f) else Color.Black.copy(alpha = 0.6f), 
-                            shape = RoundedCornerShape(8.dp)
+                            color = if (isAligned) Color.Green.copy(alpha = 0.2f) else Color.Black.copy(alpha = 0.7f), 
+                            shape = RoundedCornerShape(12.dp)
                         )
-                        .border(2.dp, if (isAligned) Color.Green else Color.Transparent, RoundedCornerShape(8.dp))
-                        .padding(16.dp),
+                        .border(2.dp, if (isAligned) Color.Green else Color.Transparent, RoundedCornerShape(12.dp))
+                        .padding(20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = if (isAligned) "PERFECT MATCH" else "DEVIATION FROM START",
+                        text = if (isAligned) "محاذاة تامة (0,0)" else "الانحراف عن البداية",
                         color = if (isAligned) Color.Green else Color.White,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp,
-                        modifier = Modifier.padding(bottom = 8.dp)
+                        fontSize = 20.sp,
+                        modifier = Modifier.padding(bottom = 12.dp)
                     )
                     
                     if (!isAligned) {
                         Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
                             Text(
-                                text = "X: ${deviationX.toInt()}",
+                                text = "أفقي: ${deviationX.toInt()}",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 20.sp
+                                fontSize = 22.sp
                             )
+                            Spacer(modifier = Modifier.width(20.dp))
                             Text(
-                                text = "Y: ${deviationY.toInt()}",
+                                text = "عمودي: ${deviationY.toInt()}",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 20.sp
+                                fontSize = 22.sp
                             )
                         }
                     }
                 }
-            }
 
-            Button(
-                onClick = {
-                    if (isTracking) {
-                        // Stop Tracking
+                // زر إيقاف التتبع
+                Button(
+                    onClick = {
                         isTracking = false
                         trackedObjectId = null
                         referenceBoundingBox = null
                         deviationX = 0f
                         deviationY = 0f
                         isAligned = false
-                    } else {
-                        // Start Tracking: Find object in center and SET REFERENCE
-                        detectionResult?.let { result ->
-                            // Find object closest to center
-                            val centerObject = result.objects.minByOrNull { obj ->
-                                val objCx = obj.boundingBox.centerX()
-                                val objCy = obj.boundingBox.centerY()
-                                val imgCx = result.imageWidth / 2
-                                val imgCy = result.imageHeight / 2
-                                val dx = objCx - imgCx
-                                val dy = objCy - imgCy
-                                dx * dx + dy * dy
-                            }
-
-                            if (centerObject != null) {
-                                trackedObjectId = centerObject.trackingId
-                                // SAVE THE RAW BOUNDING BOX IMMEDIATELY
-                                referenceBoundingBox = centerObject.boundingBox
-                                isTracking = true
-                            }
-                        }
-                    }
-                },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isTracking) Color.Red else Color.Blue
-                ),
-                modifier = Modifier.fillMaxWidth(0.7f).height(56.dp)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
+                    modifier = Modifier.fillMaxWidth(0.6f).height(56.dp)
+                ) {
+                    Text(
+                        text = "إيقاف / اختيار جديد",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+        
+        // تعليمات في الأعلى (عند عدم التتبع)
+        if (!isTracking) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 60.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
             ) {
                 Text(
-                    text = if (isTracking) "RESET / STOP" else "SET REFERENCE & TRACK",
-                    fontSize = 16.sp,
+                    text = "اضغط على أي جسم لتحديده وتتبعه",
+                    color = Color.White,
+                    fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
         }
-        
-        // Instructions Overlay (Top)
-        if (!isTracking) {
-            Text(
-                text = "Align object in center -> Press SET",
-                color = Color.White,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 48.dp)
-                    .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
-                    .padding(8.dp)
-            )
-        }
     }
 }
 
-// Helper to scale bounding box from Image coordinates to Screen coordinates
+// دالة مساعدة لتحويل إحداثيات المربع من الصورة إلى الشاشة
 fun scaleBoundingBox(box: android.graphics.Rect, scaleX: Float, scaleY: Float): Rect {
     return Rect(
         left = box.left * scaleX,
@@ -345,11 +353,12 @@ fun scaleBoundingBox(box: android.graphics.Rect, scaleX: Float, scaleY: Float): 
 }
 
 /* =====================================================
-   CAMERA PREVIEW
+   معاينة الكاميرا (CAMERA PREVIEW)
 ===================================================== */
 @Composable
 fun CameraPreview(analyzer: ImageAnalysis.Analyzer) {
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     AndroidView(
         factory = { ctx ->
@@ -368,7 +377,7 @@ fun CameraPreview(analyzer: ImageAnalysis.Analyzer) {
 }
 
 /* =====================================================
-   START CAMERA FUNCTION
+   تشغيل الكاميرا
 ===================================================== */
 fun startCamera(
     context: Context,
@@ -414,7 +423,7 @@ fun startCamera(
 }
 
 /* =====================================================
-   OBJECT ANALYZER - ML KIT
+   محلل الصور (ML KIT ANALYZER)
 ===================================================== */
 class ObjectAnalyzer(
     private val onResult: (DetectionResult) -> Unit
@@ -447,7 +456,7 @@ class ObjectAnalyzer(
                 onResult(DetectionResult(objects, width, height))
             }
             .addOnFailureListener {
-                // Handle failure
+                // معالجة الخطأ
             }
             .addOnCompleteListener {
                 imageProxy.close()
