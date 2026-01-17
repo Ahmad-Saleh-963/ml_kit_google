@@ -1,4 +1,5 @@
 @file:OptIn(ExperimentalGetImage::class)
+@file:Suppress("OPT_IN_ARGUMENT_IS_NOT_MARKER")
 
 package com.example.ml_kit_google
 
@@ -22,7 +23,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -31,15 +31,12 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.objects.DetectedObject
 import com.google.mlkit.vision.objects.ObjectDetection
@@ -77,8 +74,8 @@ fun ObjectTrackingScreen() {
     var referenceBoundingBox by remember { mutableStateOf<android.graphics.Rect?>(null) }
     
     // معلومات الانحراف
-    var deviationX by remember { mutableStateOf(0f) }
-    var deviationY by remember { mutableStateOf(0f) }
+    var deviationX by remember { mutableFloatStateOf(0f) }
+    var deviationY by remember { mutableFloatStateOf(0f) }
     var isAligned by remember { mutableStateOf(false) }
 
     // حجم الشاشة الفعلي (لحساب اللمس)
@@ -169,14 +166,17 @@ fun ObjectTrackingScreen() {
                             center = scaledBox.center
                         )
                         
-                        // نص توضيحي
+                        // الحصول على التصنيف (Label)
+                        val label = obj.labels.firstOrNull()?.text ?: "جسم"
+
+                        // كتابة التصنيف فوق الجسم
                         drawContext.canvas.nativeCanvas.drawText(
-                            "اضغط",
+                            label,
                             scaledBox.left,
-                            scaledBox.top - 10,
+                            scaledBox.top - 15,
                             Paint().apply {
                                 color = android.graphics.Color.YELLOW
-                                textSize = 30f
+                                textSize = 40f
                                 isFakeBoldText = true
                             }
                         )
@@ -243,10 +243,25 @@ fun ObjectTrackingScreen() {
                                 )
                             }
 
-                            // رسم نص الحالة
-                            val text = if (isAligned) "محاذاة تامة" else "X:${dx.toInt()} Y:${dy.toInt()}"
+                            // الحصول على التصنيف للجسم المتتبع
+                            val label = trackedObject.labels.firstOrNull()?.text ?: "جسم"
+
+                            // رسم التصنيف فوق المربع
                             drawContext.canvas.nativeCanvas.drawText(
-                                text,
+                                label,
+                                currentBox.left,
+                                currentBox.top - 20,
+                                Paint().apply {
+                                    color = androidStatusColor
+                                    textSize = 45f
+                                    isFakeBoldText = true
+                                }
+                            )
+
+                            // رسم نص الحالة (الانحراف) أسفل المربع
+                            val statusText = if (isAligned) "محاذاة تامة" else "X:${dx.toInt()} Y:${dy.toInt()}"
+                            drawContext.canvas.nativeCanvas.drawText(
+                                statusText,
                                 currentBox.left,
                                 currentBox.bottom + 60,
                                 Paint().apply {
@@ -452,6 +467,7 @@ class ObjectAnalyzer(
         ObjectDetectorOptions.Builder()
             .setDetectorMode(ObjectDetectorOptions.STREAM_MODE)
             .enableMultipleObjects()
+            .enableClassification() // تفعيل التصنيف
             .build()
     )
 
