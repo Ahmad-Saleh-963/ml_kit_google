@@ -84,4 +84,9 @@ dependencies {
        Lifecycle (Compose + CameraX)
     ============================== */
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+
+    /* =============================
+       USB Serial
+    ============================== */
+    implementation("com.github.mik3y:usb-serial-for-android:3.7.0")
 }

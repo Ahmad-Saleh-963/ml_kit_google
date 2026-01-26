@@ -17,6 +17,8 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         maven { url = java.net.URI("https://dl.google.com/dl/android/maven2/") }
+        // إضافة مستودع JitPack
+        maven { url = java.net.URI("https://jitpack.io") }
     }
 }
 
