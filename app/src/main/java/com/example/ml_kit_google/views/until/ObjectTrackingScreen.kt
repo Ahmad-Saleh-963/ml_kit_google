@@ -1,6 +1,8 @@
 package com.example.ml_kit_google.views.until
 
+import android.content.Context
 import android.graphics.Paint
+import android.hardware.usb.UsbManager
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -24,6 +26,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -40,12 +43,14 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.toSize
 import com.example.ml_kit_google.views.models.DetectionResult
 import com.example.ml_kit_google.views.screens.CameraPreview
+import com.example.ml_kit_google.views.services.UsbHelper
 import kotlin.math.abs
 
 /**
@@ -65,11 +70,22 @@ fun ObjectTrackingScreen() {
     var isAligned by remember { mutableStateOf(false) }
     var screenSize by remember { mutableStateOf(Size.Zero) }
     val kalmanTracker = remember { mutableStateOf<KalmanTracker?>(null) }
+    var receivedUsbData by remember { mutableStateOf("No data") }
 
     // --- حالات جديدة للتحكم في سرعة المعالجة --- //
     var showSpeedSlider by remember { mutableStateOf(false) }
     // القيمة 1 = فوري، القيمة 30 = بطيء. القيمة الافتراضية هي 5.
     var processingSpeed by remember { mutableIntStateOf(5) }
+
+    val context = LocalContext.current
+    val usbHelper = remember { UsbHelper(context) }
+    val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+
+    LaunchedEffect(usbHelper) {
+        usbHelper.incomingData.collect { data ->
+            receivedUsbData = data
+        }
+    }
 
     // --- إعداد محلل الصور --- //
 
@@ -214,6 +230,12 @@ fun ObjectTrackingScreen() {
                 }
             }
         }
+        Text(
+            text = "Received: $receivedUsbData",
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.align(Alignment.TopCenter).padding(16.dp)
+        )
 
         // 3. واجهة التحكم في الأسفل (أزرار وشريط التمرير).
         Column(
@@ -283,6 +305,18 @@ fun ObjectTrackingScreen() {
                         Text("إيقاف / اختيار جديد", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     }
                     Spacer(Modifier.width(16.dp))
+                    Button(
+                        onClick = {
+                            val devices = usbManager.deviceList.values
+                            val device = devices.firstOrNull()
+                            if (device != null) {
+                                usbHelper.connect(device, 9600)
+                            }
+                        },
+                        modifier = Modifier.weight(1f).height(56.dp)
+                    ) {
+                        Text("Connect USB")
+                    }
                 }
 
                 // --- زر الإعدادات (يظهر دائمًا) ---
