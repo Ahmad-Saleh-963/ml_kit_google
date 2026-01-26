@@ -3,7 +3,6 @@ package com.example.ml_kit_google.views.until
 import android.graphics.Paint
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -260,9 +259,6 @@ fun ObjectTrackingScreen() {
                 Spacer(Modifier.height(16.dp))
             }
 
-            if (isTracking) {
-                // ... (واجهة معلومات الانحراف لم تتغير)
-            }
 
             // --- صف الأزرار (زر الإيقاف وزر الإعدادات) --- //
             Row(
